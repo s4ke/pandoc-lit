@@ -6,7 +6,7 @@
 {-# LANGUAGE RecordWildCards #-}
 module Text.Pandoc.Lit(main) where
 
-import Text.Pandoc
+import Text.Pandoc hiding (getDataFileName)
 import Text.Pandoc.Error
 import Text.CSL.Pandoc
 import Text.CSL hiding (abstract, bibliography, references, processBibliography)
@@ -28,11 +28,15 @@ import Data.List (intersperse, stripPrefix)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Char (isSpace)
 
+import Data.Text(pack, Text)
+
 import Text.RegexPR
 
 import Text.Pandoc.Scripting.Structure (Structure (Block, Section),  onStructure)
 
 import Paths_pandoc_lit (getDataFileName)
+
+import Control.Monad.IO.Class
 
 -- transformation
 
@@ -138,7 +142,7 @@ transformInline _config (Math t m) = Math t (escapeBar m)
 transformInline _config (RawInline (Format "tex") text) = RawInline (Format "tex") $ unescapeComments text
 transformInline _config (RawInline (Format "latex") text) = RawInline (Format "latex") $ unescapeComments text
 transformInline _config (RawInline (Format format) text) = error $ "raw " ++ format ++ " not supported by pandoc-lit (" ++ text ++ ")"
-transformInline _config (Link text (s1, s2)) = Link text (escapeBar s1, escapeBar s2)
+transformInline _config (Link alt text (s1, s2)) = Link alt text (escapeBar s1, escapeBar s2)
 transformInline _config x = x
 
 transformFloats :: [Block] -> [Block]
@@ -276,25 +280,25 @@ onBlocks f (Pandoc meta blocks) = Pandoc meta (f blocks)
 parserState :: ReaderOptions
 parserState = def
   { readerExtensions = readerExtensions def
-  , readerParseRaw = True
-  , readerSmart = True
-  , readerApplyMacros = False
+--  , readerParseRaw = True
+--  , readerSmart = True
+-- , readerApplyMacros = False
   }
 
-readDoc :: Config -> String -> Pandoc
-readDoc _ = handleError . readMarkdown parserState
+readDoc :: PandocMonad m => Config -> Text -> m Pandoc
+readDoc _ = readMarkdown parserState
 {-
   parserState { stateCitations = case references config of
                                    Just refs  ->  map refId refs
                                    Nothing    ->  [] }
                                    -}
 
-writeDoc :: Config -> Pandoc -> String
+writeDoc :: PandocMonad m => Config -> Pandoc -> m Text
 writeDoc Config{..} = writeLaTeX opts where
   opts
     = def
-      { writerStandalone = isJust configTemplate
-      , writerTemplate = fromMaybe "" configTemplate
+      { --writerStandalone = isJust configTemplate
+       writerTemplate = configTemplate
       , writerVariables = configVariables
       , writerNumberSections = True
       , writerCiteMethod = configCiteMethod
@@ -675,7 +679,7 @@ main = do
   case getOpt (ReturnInOrder processFile) options args of
     (configT, [], [])
       -> case foldr (.) id configT (Transform defaultConfig) of
-           Transform config  -> transform config
+           Transform config  -> runIOorExplode $ transform config
            Help              -> help >> exitSuccess
     (_, _, errors)
       -> do mapM_ (hPutStrLn stderr) errors
@@ -692,7 +696,7 @@ usage = do
 
 readDefaultTemplate :: IO String
 readDefaultTemplate
-  = readDataFile ("templates" </> "lhs2tex"  <.> "template")
+  = Text.Pandoc.Lit.readDataFile ("templates" </> "lhs2tex"  <.> "template")
 
 readDataFile :: FilePath -> IO String
 readDataFile fname
@@ -712,21 +716,21 @@ readTemplate Config{..} =
            then return Just `ap` readDefaultTemplate
            else return Nothing
 
-transform :: Config -> IO ()
+transform :: Config -> PandocIO ()
 transform (config@Config {configFiles = []})
   = transform (config {configFiles = ["-"]})
 
 transform config = do
   -- read template
-  templateText <- readTemplate config
+  templateText <- liftIO $ readTemplate config
   let config' = config {configTemplate = templateText}
 
   -- output include directives
-  mapM_ (\x -> putStrLn ("%include " ++ x)) (configIncludes config')
+  liftIO $ mapM_ (\x -> putStrLn ("%include " ++ x)) (configIncludes config')
 
   -- read bibliography
   refs  <-  case configBibliography config of
-              Just bib  ->  liftM Just (readBiblioFile bib)
+              Just bib  ->  liftIO $ liftM Just (readBiblioFile (const True) bib)
               Nothing   ->  return Nothing
   let config'' = config' {configReferences = refs}
 
@@ -744,12 +748,12 @@ readFileOrGetContents :: String -> IO String
 readFileOrGetContents "-" = getContents
 readFileOrGetContents file = readFileUTF8 file
 
-transformFile :: Config -> FilePath -> IO ()
+transformFile :: Config -> FilePath -> PandocIO ()
 transformFile config file = do
-  text         <-  readFileOrGetContents file
-  text'        <-  transformEval config file text
+  text         <-  liftIO $ readFileOrGetContents file
+  text'        <-  liftIO $ transformEval config file text
   text''       <-  if configProcessIncludes config
-                     then includeIncludes config text'
+                     then liftIO $ includeIncludes config text'
                      else return text'
   let text'''  =   if configPreserveComments config
                      then escapeComments text''
@@ -759,21 +763,23 @@ transformFile config file = do
                    Just filename  ->  return filename
                    Nothing        ->  return "default.csl"
 
-  let doc    =   readDoc config text'''
+  doc    <- readDoc config $ pack text'''
   let doc'   =   transformDoc config doc
-  cslstyle <- readCSLFile Nothing cslfile
+  cslstyle <- liftIO $ readCSLFile Nothing cslfile
   let doc''  = case configReferences config of
                    Just refs | configCiteMethod config == Citeproc
                               ->  processCites cslstyle refs doc'
                    _          ->  doc'
 
-  headerIncludes <- mapM readFile (configIncludeInHeader config)
-  includeBefore <- mapM readFile (configIncludeBeforeBody config)
+  headerIncludes <- liftIO $ mapM readFile (configIncludeInHeader config)
+  includeBefore <- liftIO $ mapM readFile (configIncludeBeforeBody config)
   let config' = config {configVariables = configVariables config ++
                         map ((,) "header-includes") headerIncludes ++
                         map ((,) "include-before") includeBefore}
+                        
+  text <- (writeDoc config' $ doc'')
 
-  putStrLn . avoidUTF8 . writeDoc config' $ doc''
+  liftIO $ putStrLn $ avoidUTF8 $ show $ text
 
 avoidUTF8 :: String -> String
 avoidUTF8 = concatMap f where

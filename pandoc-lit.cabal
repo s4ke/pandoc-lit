@@ -1,5 +1,5 @@
 Name:            pandoc-lit
-Version:         0.3
+Version:         0.4
 Synopsis:        Literate programming with pandoc and lhs2tex
 Description:     pandoc-lit supports literate programming by
                  combining two excellent tools: pandoc for text
@@ -32,8 +32,8 @@ Description:     pandoc-lit supports literate programming by
 Homepage:        http://www.informatik.uni-marburg.de/~rendel/pandoc-lit
 License:         BSD3
 License-file:    LICENSE
-Author:          Tillmann Rendel
-Maintainer:      Tillmann Rendel <rendel@informatik.uni-marburg.de>
+Author:          Tillmann Rendel, Martin Braun
+Maintainer:      Tillmann Rendel <rendel@informatik.uni-marburg.de>, Martin Braun <martinbraun123@aol.com>
 Category:        Development
 Build-Type:      Simple
 Cabal-Version:   >= 1.8
@@ -46,14 +46,15 @@ Library
                       Text.Pandoc.Scripting.Structure
   Other-Modules:      Paths_pandoc_lit
   Build-Depends:      base == 4.*,
-                      pandoc == 1.15.*,
-                      pandoc-types == 1.12.*,
+                      pandoc == 2.1.*,
+                      pandoc-types >=1.17.3.1 && < 1.18,
                       pandoc-citeproc,
                       containers,
                       regexpr,
                       directory,
                       filepath,
-                      process
+                      process,
+                      text == 1.2.*
 
 Executable pandoc-lit
   Main-Is:            pandoc-lit.hs
